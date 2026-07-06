@@ -267,8 +267,10 @@ Distributed under the **MIT License**. See `LICENSE` for more information.
 
 <div align="center">
 
-Made with ❤️ by the **CheatLock Team**
+Made with ❤️ by **The CheatLock Team**  
+**Jubayer Rahman Chowdhury** *(Development Lead, AI/ML)*
 
 [![GitHub Stars](https://img.shields.io/github/stars/jubayer032003/cheatLock_App?style=social)](https://github.com/jubayer032003/cheatLock_App)
 
 </div>
+
