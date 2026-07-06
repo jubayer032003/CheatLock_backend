@@ -1,0 +1,22 @@
+*.iml
+.gradle
+.kotlin
+local.properties
+.idea/
+.DS_Store
+build/
+bin/
+out/
+captures/
+.externalNativeBuild
+.cxx
+
+# Node dependencies and build output
+node_modules/
+dist/
+.next/
+.env
+.env.local
+.env.*.local
+*.log
+
