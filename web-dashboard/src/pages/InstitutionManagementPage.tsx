@@ -96,7 +96,6 @@ export function InstitutionManagementPage() {
   const handleRemoveDepartment = (code: string) => {
     setDepartments((prev) => prev.filter((d) => d.code !== code));
   };
-
   const handleSaveSettings = async () => {
     setMessage("");
     try {
@@ -105,6 +104,7 @@ export function InstitutionManagementPage() {
         branding: { logoUrl, primaryColor, theme },
         settings: {
           aiThresholds: {
+            ...tenant?.settings?.aiThresholds,
             faceMissingWeight: faceMissing,
             multipleFacesWeight: multipleFaces,
             phoneDetectedWeight: phoneDetected,
@@ -124,11 +124,11 @@ export function InstitutionManagementPage() {
       const updated = await updateTenantSettings(payload);
       setTenant(updated);
       setMessage("Settings saved successfully.");
-    } catch {
-      setMessage("Failed to update organization settings.");
+    } catch (err: any) {
+      const errMsg = err.response?.data?.message || err.message || "Failed to update organization settings.";
+      setMessage(`Failed to update organization settings: ${errMsg}`);
     }
   };
-
   if (loading) {
     return <p className="p-8 text-center text-xs font-mono text-slate-500">Loading settings...</p>;
   }
