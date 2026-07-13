@@ -75,6 +75,7 @@ export function ScreenProvider({ children }: { children: React.ReactNode }) {
       setCaptureHealth(status);
       if (status === "disconnected") {
         showToast("Screen capture stopped by candidate.", "error");
+        reportViolationEvent("SCREEN_SHARE_STOPPED", "Screen", 1.0, "Student terminated screen share permission.");
       }
     });
 
