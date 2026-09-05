@@ -96,7 +96,7 @@ export const config = {
     expiresIn: readOptional("JWT_EXPIRES_IN", readOptional("NODE_ENV", "development") === "production" ? "1h" : "7d"),
   },
   redis: {
-    url: readOptional("REDIS_URL", "redis://127.0.0.1:6379"),
+    url: readOptional("REDIS_URL"),
   },
   cors: {
     clientOrigin: readOptional("CLIENT_ORIGIN"),

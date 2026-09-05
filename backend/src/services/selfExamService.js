@@ -1,5 +1,5 @@
 import { getSupabaseAdminClient, throwSupabaseError } from "./supabaseClient.js";
-import { isUuid, serializeQuestion } from "./questionBankService.js";
+import { collectNodeAndDescendantIds, isUuid, serializeQuestion } from "./questionBankService.js";
 
 const DIFFICULTY_MODES = new Set(["easy", "medium", "hard", "mixed"]);
 const FINAL_STATUSES = new Set(["submitted", "expired", "cancelled"]);
@@ -7,10 +7,18 @@ const FINAL_STATUSES = new Set(["submitted", "expired", "cancelled"]);
 export function normalizeSelfExamConfig(body = {}) {
   const durationMinutes = Number(body.durationMinutes || body.duration_minutes || 10);
   const questionCount = Number(body.questionCount || body.question_count || 10);
+  if (body.classId || body.class_id) {
+    requiredUuid(body.classId || body.class_id, "Class is required.");
+  }
+  if (body.subjectId || body.subject_id) {
+    requiredUuid(body.subjectId || body.subject_id, "Subject is required.");
+  }
+  if (body.chapterId || body.chapter_id) {
+    requiredUuid(body.chapterId || body.chapter_id, "Chapter is required.");
+  }
+  const nodeId = body.nodeId || body.node_id || body.chapterId || body.chapter_id || body.subjectId || body.subject_id || body.classId || body.class_id;
   const config = {
-    class_id: requiredUuid(body.classId || body.class_id, "Class is required."),
-    subject_id: requiredUuid(body.subjectId || body.subject_id, "Subject is required."),
-    chapter_id: optionalUuid(body.chapterId || body.chapter_id, "Invalid chapter."),
+    node_id: requiredUuid(nodeId, "Question bank selection is required."),
     duration_minutes: integerInRange(durationMinutes, 1, 180, "Duration must be between 1 and 180 minutes."),
     question_count: integerInRange(questionCount, 1, 100, "Question count must be between 1 and 100."),
     difficulty_mode: normalizeDifficultyMode(body.difficultyMode || body.difficulty_mode || "mixed"),
@@ -63,7 +71,7 @@ export function pickQuestionIds(questions, count, difficultyMode = "mixed", rand
 
 export async function createSelfExamSession(studentId, body) {
   const config = normalizeSelfExamConfig(body);
-  await assertHierarchy(config);
+  await assertNodeSelection(config.node_id);
   const { data, error } = await getSupabaseAdminClient()
     .from("question_bank_self_exam_sessions")
     .insert([{ ...config, student_id: studentId, status: "created" }])
@@ -235,35 +243,28 @@ export async function getSelfExamResult(studentId, sessionId) {
 }
 
 async function assertHierarchy(config) {
-  const client = getSupabaseAdminClient();
-  const { data: subject, error: subjectError } = await client
-    .from("question_bank_subjects")
-    .select("id,class_id,is_active")
-    .eq("id", config.subject_id)
+  await assertNodeSelection(config.node_id);
+}
+
+async function assertNodeSelection(nodeId) {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("exam_nodes")
+    .select("id,is_active")
+    .eq("id", nodeId)
     .single();
-  throwSupabaseError(subjectError);
-  if (subject.class_id !== config.class_id || !subject.is_active) throwRequest("Subject does not belong to the selected class.");
-  if (config.chapter_id) {
-    const { data: chapter, error: chapterError } = await client
-      .from("question_bank_chapters")
-      .select("id,subject_id,is_active")
-      .eq("id", config.chapter_id)
-      .single();
-    throwSupabaseError(chapterError);
-    if (chapter.subject_id !== config.subject_id || !chapter.is_active) throwRequest("Chapter does not belong to the selected subject.");
-  }
+  throwSupabaseError(error);
+  if (!data?.is_active) throwRequest("Selected question bank node is inactive.");
 }
 
 async function fetchEligibleQuestions(session) {
+  const nodeIds = await collectNodeAndDescendantIds(session.node_id);
   let query = getSupabaseAdminClient()
     .from("question_bank_questions")
     .select("id,difficulty,marks")
-    .eq("class_id", session.class_id)
-    .eq("subject_id", session.subject_id)
+    .in("node_id", nodeIds)
     .eq("status", "active")
     .eq("question_type", "mcq")
     .limit(500);
-  if (session.chapter_id) query = query.eq("chapter_id", session.chapter_id);
   if (session.difficulty_mode && session.difficulty_mode !== "mixed") query = query.eq("difficulty", session.difficulty_mode);
   const { data, error } = await query;
   throwSupabaseError(error);
@@ -273,7 +274,7 @@ async function fetchEligibleQuestions(session) {
 async function fetchSessionQuestions(sessionId, { includeAnswers = false } = {}) {
   const { data, error } = await getSupabaseAdminClient()
     .from("question_bank_self_exam_session_questions")
-    .select("display_order,marks,question_bank_questions(id,class_id,subject_id,chapter_id,question_type,question_text,difficulty,marks,explanation,status,question_bank_question_options(id,option_text,is_correct,display_order))")
+    .select("display_order,marks,question_bank_questions(id,node_id,question_type,question_text,difficulty,marks,explanation,status,question_bank_question_options(id,option_text,is_correct,display_order))")
     .eq("session_id", sessionId)
     .order("display_order", { ascending: true });
   throwSupabaseError(error);
@@ -358,9 +359,10 @@ export function serializeSession(session) {
   return {
     id: session.id,
     studentId: session.student_id,
-    classId: session.class_id,
-    subjectId: session.subject_id,
-    chapterId: session.chapter_id,
+    nodeId: session.node_id,
+    classId: session.class_id || session.node_id,
+    subjectId: session.subject_id || session.node_id,
+    chapterId: session.chapter_id || session.node_id,
     durationMinutes: session.duration_minutes,
     questionCount: session.question_count,
     difficultyMode: session.difficulty_mode,
