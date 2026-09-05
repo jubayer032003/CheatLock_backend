@@ -129,7 +129,8 @@ export function resolveAllowedOrigins({
       continue;
     }
     if (entry === "*") {
-      throw new Error("Wildcard CORS origins are not allowed in production.");
+      configured.push("*");
+      continue;
     }
     configured.push(normalizeOrigin(entry));
   }
@@ -154,6 +155,10 @@ export function buildCorsOptions() {
         return;
       }
       try {
+        if (allowedOrigins.includes("*")) {
+          callback(null, true);
+          return;
+        }
         const normalized = normalizeOrigin(origin);
         callback(null, allowedOrigins.includes(normalized));
       } catch {
