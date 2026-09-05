@@ -64,73 +64,98 @@ export async function getExamNodes({ categoryId, parentId = null, includeInactiv
 }
 
 export async function getExamTree({ includeInactive = false } = {}) {
-  const [categories, nodes] = await Promise.all([
-    getExamCategories({ includeInactive }),
-    getAllExamNodes({ includeInactive }),
-  ]);
-  const childrenByParent = new Map();
-  for (const node of nodes) {
-    const key = node.parentId || `category:${node.categoryId}`;
-    childrenByParent.set(key, [...(childrenByParent.get(key) || []), node]);
+  try {
+    const [categories, nodes] = await Promise.all([
+      getExamCategories({ includeInactive }),
+      getAllExamNodes({ includeInactive }),
+    ]);
+    const childrenByParent = new Map();
+    for (const node of nodes) {
+      const key = node.parentId || `category:${node.categoryId}`;
+      childrenByParent.set(key, [...(childrenByParent.get(key) || []), node]);
+    }
+    const hydrate = (node) => ({ ...node, children: (childrenByParent.get(node.id) || []).map(hydrate) });
+    return categories.map((category) => ({
+      ...category,
+      children: (childrenByParent.get(`category:${category.id}`) || []).map(hydrate),
+    }));
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return getLegacyExamTree({ includeInactive });
   }
-  const hydrate = (node) => ({ ...node, children: (childrenByParent.get(node.id) || []).map(hydrate) });
-  return categories.map((category) => ({
-    ...category,
-    children: (childrenByParent.get(`category:${category.id}`) || []).map(hydrate),
-  }));
 }
 
 export async function createExamNode(body, adminId) {
-  const payload = await assertNodePayload(body);
-  const { data, error } = await getSupabaseAdminClient()
-    .from("exam_nodes")
-    .insert([payload])
-    .select("*")
-    .single();
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "create", "exam_node", data.id, { name: data.name, type: data.type });
-  return serializeNode(data);
+  try {
+    const payload = await assertNodePayload(body);
+    const { data, error } = await getSupabaseAdminClient()
+      .from("exam_nodes")
+      .insert([payload])
+      .select("*")
+      .single();
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "create", "exam_node", data.id, { name: data.name, type: data.type });
+    return serializeNode(data);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return serializeLegacyNode(await createLegacyNode(body, adminId));
+  }
 }
 
 export async function updateExamNode(nodeId, body, adminId) {
-  requiredUuid(nodeId, "Invalid node.");
-  const payload = await assertNodePayload(body, { existingNodeId: nodeId });
-  const { data, error } = await getSupabaseAdminClient()
-    .from("exam_nodes")
-    .update({ ...payload, updated_at: new Date().toISOString() })
-    .eq("id", nodeId)
-    .select("*")
-    .single();
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "update", "exam_node", nodeId, { name: data.name, type: data.type });
-  return serializeNode(data);
+  try {
+    requiredUuid(nodeId, "Invalid node.");
+    const payload = await assertNodePayload(body, { existingNodeId: nodeId });
+    const { data, error } = await getSupabaseAdminClient()
+      .from("exam_nodes")
+      .update({ ...payload, updated_at: new Date().toISOString() })
+      .eq("id", nodeId)
+      .select("*")
+      .single();
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "update", "exam_node", nodeId, { name: data.name, type: data.type });
+    return serializeNode(data);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return serializeLegacyNode(await updateLegacyNode(nodeId, body, adminId));
+  }
 }
 
 export async function deleteExamNode(nodeId, adminId) {
-  requiredUuid(nodeId, "Invalid item.");
-  const ids = await collectNodeAndDescendantIds(nodeId);
-  await deleteSelfExamSessionsForNodes(ids);
-  await deleteQuestionsForNodes(ids, adminId);
-  const { error } = await getSupabaseAdminClient()
-    .from("exam_nodes")
-    .delete()
-    .eq("id", nodeId);
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "delete", "exam_node", nodeId, { descendantCount: ids.length - 1 });
-  return { id: nodeId };
+  try {
+    requiredUuid(nodeId, "Invalid item.");
+    const ids = await collectNodeAndDescendantIds(nodeId);
+    await deleteSelfExamSessionsForNodes(ids);
+    await deleteQuestionsForNodes(ids, adminId);
+    const { error } = await getSupabaseAdminClient()
+      .from("exam_nodes")
+      .delete()
+      .eq("id", nodeId);
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "delete", "exam_node", nodeId, { descendantCount: ids.length - 1 });
+    return { id: nodeId };
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return deleteLegacyNode(nodeId, adminId);
+  }
 }
 
 export async function setExamNodeStatus(nodeId, isActive, adminId) {
-  requiredUuid(nodeId, "Invalid node.");
-  const { data, error } = await getSupabaseAdminClient()
-    .from("exam_nodes")
-    .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString() })
-    .eq("id", nodeId)
-    .select("*")
-    .single();
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "set_status", "exam_node", nodeId, { isActive: data.is_active });
-  return serializeNode(data);
+  try {
+    requiredUuid(nodeId, "Invalid node.");
+    const { data, error } = await getSupabaseAdminClient()
+      .from("exam_nodes")
+      .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString() })
+      .eq("id", nodeId)
+      .select("*")
+      .single();
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "set_status", "exam_node", nodeId, { isActive: data.is_active });
+    return serializeNode(data);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return serializeLegacyNode(await setLegacyNodeStatus(nodeId, isActive, adminId));
+  }
 }
 
 export async function getNodePath(nodeId) {
@@ -215,112 +240,186 @@ export function assertAdminQuestionPayload(body) {
 }
 
 export async function getClasses({ includeInactive = false } = {}) {
-  const categories = await getExamCategories({ includeInactive });
-  return categories.map((category) => ({
-    id: category.id,
-    name: category.name,
-    slug: category.slug,
-    displayOrder: category.displayOrder,
-    isActive: category.isActive,
-    kind: "category",
-  }));
+  try {
+    const categories = await getExamCategories({ includeInactive });
+    return categories.map((category) => ({
+      id: category.id,
+      name: category.name,
+      slug: category.slug,
+      displayOrder: category.displayOrder,
+      isActive: category.isActive,
+      kind: "category",
+    }));
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return getLegacyClasses({ includeInactive });
+  }
 }
 
 export async function getSubjectsByClass(classId, { includeInactive = false } = {}) {
-  const category = await findCategory(classId);
-  const nodes = category
-    ? await getExamNodes({ categoryId: classId, includeInactive })
-    : await getExamNodes({ parentId: classId, includeInactive });
-  return nodes.map((node) => serializeSubjectCompat(node, classId));
+  try {
+    const category = await findCategory(classId);
+    const nodes = category
+      ? await getExamNodes({ categoryId: classId, includeInactive })
+      : await getExamNodes({ parentId: classId, includeInactive });
+    return nodes.map((node) => serializeSubjectCompat(node, classId));
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return getLegacySubjectsByClass(classId, { includeInactive });
+  }
 }
 
 export async function getChaptersBySubject(subjectId, { includeInactive = false } = {}) {
-  const nodes = await getExamNodes({ parentId: subjectId, includeInactive });
-  return nodes.map((node) => serializeChapterCompat(node, subjectId));
+  try {
+    const nodes = await getExamNodes({ parentId: subjectId, includeInactive });
+    return nodes.map((node) => serializeChapterCompat(node, subjectId));
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return getLegacyChaptersBySubject(subjectId, { includeInactive });
+  }
 }
 
 export async function createClass(body, adminId) {
-  const payload = await assertCategoryPayload(body);
-  const { data, error } = await getSupabaseAdminClient().from("exam_categories").insert([payload]).select("*").single();
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "create", "exam_category", data.id, { name: data.name });
-  return serializeCategoryAsClass(data);
+  try {
+    const payload = await assertCategoryPayload(body);
+    const { data, error } = await getSupabaseAdminClient().from("exam_categories").insert([payload]).select("*").single();
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "create", "exam_category", data.id, { name: data.name });
+    return serializeCategoryAsClass(data);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return createLegacyClass(body, adminId);
+  }
 }
 
 export async function updateClass(classId, body, adminId) {
-  requiredUuid(classId, "Invalid category.");
-  const payload = await assertCategoryPayload(body);
-  const { data, error } = await getSupabaseAdminClient()
-    .from("exam_categories")
-    .update({ ...payload, updated_at: new Date().toISOString() })
-    .eq("id", classId)
-    .select("*")
-    .single();
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "update", "exam_category", classId, { name: data.name });
-  return serializeCategoryAsClass(data);
+  try {
+    requiredUuid(classId, "Invalid category.");
+    const payload = await assertCategoryPayload(body);
+    const { data, error } = await getSupabaseAdminClient()
+      .from("exam_categories")
+      .update({ ...payload, updated_at: new Date().toISOString() })
+      .eq("id", classId)
+      .select("*")
+      .single();
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "update", "exam_category", classId, { name: data.name });
+    return serializeCategoryAsClass(data);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return updateLegacyClass(classId, body, adminId);
+  }
 }
 
 export async function setClassStatus(classId, isActive, adminId) {
-  requiredUuid(classId, "Invalid category.");
-  const { data, error } = await getSupabaseAdminClient()
-    .from("exam_categories")
-    .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString() })
-    .eq("id", classId)
-    .select("*")
-    .single();
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "set_status", "exam_category", classId, { isActive: data.is_active });
-  return serializeCategoryAsClass(data);
+  try {
+    requiredUuid(classId, "Invalid category.");
+    const { data, error } = await getSupabaseAdminClient()
+      .from("exam_categories")
+      .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString() })
+      .eq("id", classId)
+      .select("*")
+      .single();
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "set_status", "exam_category", classId, { isActive: data.is_active });
+    return serializeCategoryAsClass(data);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return setLegacyClassStatus(classId, isActive, adminId);
+  }
 }
 
 export async function deleteClass(classId, adminId) {
-  requiredUuid(classId, "Invalid category.");
-  const nodeIds = (await getAllExamNodes({ includeInactive: true }))
-    .filter((node) => node.categoryId === classId)
-    .map((node) => node.id);
-  await deleteSelfExamSessionsForNodes(nodeIds);
-  await deleteQuestionsForNodes(nodeIds, adminId);
-  const { error } = await getSupabaseAdminClient()
-    .from("exam_categories")
-    .delete()
-    .eq("id", classId);
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "delete", "exam_category", classId, { nodeCount: nodeIds.length });
-  return { id: classId };
+  try {
+    requiredUuid(classId, "Invalid category.");
+    const nodeIds = (await getAllExamNodes({ includeInactive: true }))
+      .filter((node) => node.categoryId === classId)
+      .map((node) => node.id);
+    await deleteSelfExamSessionsForNodes(nodeIds);
+    await deleteQuestionsForNodes(nodeIds, adminId);
+    const { error } = await getSupabaseAdminClient()
+      .from("exam_categories")
+      .delete()
+      .eq("id", classId);
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "delete", "exam_category", classId, { nodeCount: nodeIds.length });
+    return { id: classId };
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return deleteLegacyClass(classId, adminId);
+  }
 }
 
 export async function createSubject(body, adminId) {
-  const node = await createExamNode({ ...body, categoryId: body.classId || body.class_id, parentId: null, type: inferTopLevelType(body.name) }, adminId);
-  return serializeSubjectCompat(node, body.classId || body.class_id);
+  try {
+    const node = await createExamNode({ ...body, categoryId: body.classId || body.class_id, parentId: null, type: inferTopLevelType(body.name) }, adminId);
+    return serializeSubjectCompat(node, body.classId || body.class_id);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return createLegacySubject(body, adminId);
+  }
 }
 
 export async function updateSubject(subjectId, body, adminId) {
-  const node = await updateExamNode(subjectId, { ...body, categoryId: body.classId || body.class_id, parentId: null, type: inferTopLevelType(body.name) }, adminId);
-  return serializeSubjectCompat(node, body.classId || body.class_id);
+  try {
+    const node = await updateExamNode(subjectId, { ...body, categoryId: body.classId || body.class_id, parentId: null, type: inferTopLevelType(body.name) }, adminId);
+    return serializeSubjectCompat(node, body.classId || body.class_id);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return updateLegacySubject(subjectId, body, adminId);
+  }
 }
 
 export async function setSubjectStatus(subjectId, isActive, adminId) {
-  return serializeSubjectCompat(await setExamNodeStatus(subjectId, isActive, adminId));
+  try {
+    return serializeSubjectCompat(await setExamNodeStatus(subjectId, isActive, adminId));
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return setLegacySubjectStatus(subjectId, isActive, adminId);
+  }
 }
 
 export async function createChapter(body, adminId) {
-  const parent = await findNode(body.subjectId || body.subject_id);
-  const node = await createExamNode({ ...body, categoryId: parent.categoryId, parentId: parent.id, type: "topic" }, adminId);
-  return serializeChapterCompat(node, parent.id);
+  try {
+    const parent = await findNode(body.subjectId || body.subject_id);
+    const node = await createExamNode({ ...body, categoryId: parent.categoryId, parentId: parent.id, type: "topic" }, adminId);
+    return serializeChapterCompat(node, parent.id);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return createLegacyChapter(body, adminId);
+  }
 }
 
 export async function updateChapter(chapterId, body, adminId) {
-  const parent = await findNode(body.subjectId || body.subject_id);
-  const node = await updateExamNode(chapterId, { ...body, categoryId: parent.categoryId, parentId: parent.id, type: "topic" }, adminId);
-  return serializeChapterCompat(node, parent.id);
+  try {
+    const parent = await findNode(body.subjectId || body.subject_id);
+    const node = await updateExamNode(chapterId, { ...body, categoryId: parent.categoryId, parentId: parent.id, type: "topic" }, adminId);
+    return serializeChapterCompat(node, parent.id);
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return updateLegacyChapter(chapterId, body, adminId);
+  }
 }
 
 export async function setChapterStatus(chapterId, isActive, adminId) {
-  return serializeChapterCompat(await setExamNodeStatus(chapterId, isActive, adminId));
+  try {
+    return serializeChapterCompat(await setExamNodeStatus(chapterId, isActive, adminId));
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return setLegacyChapterStatus(chapterId, isActive, adminId);
+  }
 }
 
 export async function searchQuestions(filters = {}, { includeAnswers = false, studentSafe = false } = {}) {
+  try {
+    return await searchExamNodeQuestions(filters, { includeAnswers, studentSafe });
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return searchLegacyQuestions(filters, { includeAnswers, studentSafe });
+  }
+}
+
+async function searchExamNodeQuestions(filters = {}, { includeAnswers = false, studentSafe = false } = {}) {
   const page = normalizePage(filters.page);
   const limit = normalizeLimit(filters.limit);
   const from = (page - 1) * limit;
@@ -365,95 +464,120 @@ export async function searchQuestions(filters = {}, { includeAnswers = false, st
 }
 
 export async function getQuestionPreview(questionId, { includeAnswers = false } = {}) {
-  requiredUuid(questionId, "Invalid question.");
-  const optionColumns = includeAnswers ? "id,option_text,is_correct,display_order" : "id,option_text,display_order";
-  const { data, error } = await getSupabaseAdminClient()
-    .from("question_bank_questions")
-    .select(`*,question_bank_question_options(${optionColumns})`)
-    .eq("id", questionId)
-    .single();
-  throwSupabaseError(error);
-  return serializeQuestion(data, { includeAnswers });
+  try {
+    requiredUuid(questionId, "Invalid question.");
+    const optionColumns = includeAnswers ? "id,option_text,is_correct,display_order" : "id,option_text,display_order";
+    const { data, error } = await getSupabaseAdminClient()
+      .from("question_bank_questions")
+      .select(`*,question_bank_question_options(${optionColumns})`)
+      .eq("id", questionId)
+      .single();
+    throwSupabaseError(error);
+    return serializeQuestion(data, { includeAnswers });
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return getLegacyQuestionPreview(questionId, { includeAnswers });
+  }
 }
 
 export async function createQuestion(body, adminId) {
-  const payload = assertAdminQuestionPayload(body);
-  await assertQuestionHierarchy(payload.question);
-  await assertQuestionNode(payload.question.node_id);
-  const client = getSupabaseAdminClient();
-  const { data: question, error } = await client
-    .from("question_bank_questions")
-    .insert([{ ...payload.question, created_by: adminId, updated_by: adminId }])
-    .select("*")
-    .single();
-  throwSupabaseError(error);
-  if (payload.options.length > 0) {
-    const { error: optionsError } = await client
-      .from("question_bank_question_options")
-      .insert(payload.options.map((option) => ({ ...option, question_id: question.id })));
-    throwSupabaseError(optionsError);
+  try {
+    const payload = assertAdminQuestionPayload(body);
+    await assertQuestionHierarchy(payload.question);
+    await assertQuestionNode(payload.question.node_id);
+    const client = getSupabaseAdminClient();
+    const { data: question, error } = await client
+      .from("question_bank_questions")
+      .insert([{ ...payload.question, created_by: adminId, updated_by: adminId }])
+      .select("*")
+      .single();
+    throwSupabaseError(error);
+    if (payload.options.length > 0) {
+      const { error: optionsError } = await client
+        .from("question_bank_question_options")
+        .insert(payload.options.map((option) => ({ ...option, question_id: question.id })));
+      throwSupabaseError(optionsError);
+    }
+    await writeAuditLog(adminId, "create", "question_bank_question", question.id, { text: question.question_text });
+    return serializeQuestion(question, { includeAnswers: true });
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return createLegacyQuestion(body, adminId);
   }
-  await writeAuditLog(adminId, "create", "question_bank_question", question.id, { text: question.question_text });
-  return serializeQuestion(question, { includeAnswers: true });
 }
 
 export async function updateQuestion(questionId, body, adminId) {
-  requiredUuid(questionId, "Invalid question.");
-  const payload = assertAdminQuestionPayload(body);
-  await assertQuestionHierarchy(payload.question);
-  await assertQuestionNode(payload.question.node_id);
-  const client = getSupabaseAdminClient();
-  const { data: question, error } = await client
-    .from("question_bank_questions")
-    .update({ ...payload.question, updated_by: adminId, updated_at: new Date().toISOString() })
-    .eq("id", questionId)
-    .select("*")
-    .single();
-  throwSupabaseError(error);
+  try {
+    requiredUuid(questionId, "Invalid question.");
+    const payload = assertAdminQuestionPayload(body);
+    await assertQuestionHierarchy(payload.question);
+    await assertQuestionNode(payload.question.node_id);
+    const client = getSupabaseAdminClient();
+    const { data: question, error } = await client
+      .from("question_bank_questions")
+      .update({ ...payload.question, updated_by: adminId, updated_at: new Date().toISOString() })
+      .eq("id", questionId)
+      .select("*")
+      .single();
+    throwSupabaseError(error);
 
-  const { error: deleteError } = await client.from("question_bank_question_options").delete().eq("question_id", questionId);
-  throwSupabaseError(deleteError);
-  if (payload.options.length > 0) {
-    const { error: insertError } = await client
-      .from("question_bank_question_options")
-      .insert(payload.options.map((option) => ({ ...option, question_id: questionId })));
-    throwSupabaseError(insertError);
+    const { error: deleteError } = await client.from("question_bank_question_options").delete().eq("question_id", questionId);
+    throwSupabaseError(deleteError);
+    if (payload.options.length > 0) {
+      const { error: insertError } = await client
+        .from("question_bank_question_options")
+        .insert(payload.options.map((option) => ({ ...option, question_id: questionId })));
+      throwSupabaseError(insertError);
+    }
+
+    await writeAuditLog(adminId, "update", "question", questionId, { status: payload.question.status, nodeId: payload.question.node_id });
+    return getQuestionPreview(questionId, { includeAnswers: true });
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return updateLegacyQuestion(questionId, body, adminId);
   }
-
-  await writeAuditLog(adminId, "update", "question", questionId, { status: payload.question.status, nodeId: payload.question.node_id });
-  return getQuestionPreview(questionId, { includeAnswers: true });
 }
 
 export async function setQuestionStatus(questionId, status, adminId) {
-  requiredUuid(questionId, "Invalid question.");
-  const normalizedStatus = normalizeEnum(status, STATUSES, "Invalid status.");
-  const { data, error } = await getSupabaseAdminClient()
-    .from("question_bank_questions")
-    .update({ status: normalizedStatus, updated_by: adminId, updated_at: new Date().toISOString() })
-    .eq("id", questionId)
-    .select("*")
-    .single();
-  throwSupabaseError(error);
-  await writeAuditLog(adminId, "set_status", "question", questionId, { status: normalizedStatus });
-  return serializeQuestion(data, { includeAnswers: true });
+  try {
+    requiredUuid(questionId, "Invalid question.");
+    const normalizedStatus = normalizeEnum(status, STATUSES, "Invalid status.");
+    const { data, error } = await getSupabaseAdminClient()
+      .from("question_bank_questions")
+      .update({ status: normalizedStatus, updated_by: adminId, updated_at: new Date().toISOString() })
+      .eq("id", questionId)
+      .select("*")
+      .single();
+    throwSupabaseError(error);
+    await writeAuditLog(adminId, "set_status", "question", questionId, { status: normalizedStatus });
+    return serializeQuestion(data, { includeAnswers: true });
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return setLegacyQuestionStatus(questionId, status, adminId);
+  }
 }
 
 export async function deleteQuestion(questionId, adminId) {
-  requiredUuid(questionId, "Invalid question.");
-  const client = getSupabaseAdminClient();
-  const { data: question, error: findError } = await client
-    .from("question_bank_questions")
-    .select("id,node_id,question_text")
-    .eq("id", questionId)
-    .single();
-  throwSupabaseError(findError);
+  try {
+    requiredUuid(questionId, "Invalid question.");
+    const client = getSupabaseAdminClient();
+    const { data: question, error: findError } = await client
+      .from("question_bank_questions")
+      .select("id,node_id,question_text")
+      .eq("id", questionId)
+      .single();
+    throwSupabaseError(findError);
 
-  await deleteQuestionRows([questionId]);
-  await writeAuditLog(adminId, "delete", "question", questionId, {
-    nodeId: question.node_id,
-    text: String(question.question_text || "").slice(0, 160),
-  });
-  return { id: questionId };
+    await deleteQuestionRows([questionId]);
+    await writeAuditLog(adminId, "delete", "question", questionId, {
+      nodeId: question.node_id,
+      text: String(question.question_text || "").slice(0, 160),
+    });
+    return { id: questionId };
+  } catch (error) {
+    if (!isMissingExamHierarchyError(error)) throw error;
+    return deleteLegacyQuestion(questionId, adminId);
+  }
 }
 
 export function serializeQuestion(question, { includeAnswers = false } = {}) {
@@ -855,6 +979,617 @@ function serializeChapterCompat(node, subjectId = null) {
     displayOrder: node.displayOrder,
     isActive: node.isActive,
   };
+}
+
+async function getLegacyExamTree({ includeInactive = false } = {}) {
+  const classes = await getLegacyClasses({ includeInactive });
+  const tree = [];
+  for (const item of classes) {
+    const subjects = await getLegacySubjectsByClass(item.id, { includeInactive });
+    const children = [];
+    for (const subject of subjects) {
+      const chapters = await getLegacyChaptersBySubject(subject.id, { includeInactive });
+      children.push({
+        id: subject.id,
+        categoryId: item.id,
+        parentId: null,
+        name: subject.name,
+        slug: subject.slug,
+        type: "subject",
+        color: "#10b981",
+        displayOrder: subject.displayOrder,
+        isActive: subject.isActive,
+        metadata: { code: subject.code || "" },
+        children: chapters.map((chapter) => ({
+          id: chapter.id,
+          categoryId: item.id,
+          parentId: subject.id,
+          name: chapter.name,
+          slug: chapter.slug,
+          type: "chapter",
+          color: "#2563eb",
+          displayOrder: chapter.displayOrder,
+          isActive: chapter.isActive,
+          metadata: { chapterNumber: chapter.chapterNumber ?? null },
+          children: [],
+        })),
+      });
+    }
+    tree.push({ ...item, color: item.color || "#2563eb", children });
+  }
+  return tree;
+}
+
+async function getLegacyClasses({ includeInactive = false } = {}) {
+  let query = getSupabaseAdminClient()
+    .from("question_bank_classes")
+    .select("id,name,slug,display_order,is_active,created_at,updated_at")
+    .order("display_order", { ascending: true })
+    .order("name", { ascending: true });
+  if (!includeInactive) query = query.eq("is_active", true);
+  const { data, error } = await query;
+  throwSupabaseError(error);
+  return (data || []).map((row) => ({ ...serializeLegacyClass(row), kind: "category" }));
+}
+
+async function getLegacySubjectsByClass(classId, { includeInactive = false } = {}) {
+  requiredUuid(classId, "Invalid class.");
+  let query = getSupabaseAdminClient()
+    .from("question_bank_subjects")
+    .select("id,class_id,name,slug,code,display_order,is_active,created_at,updated_at")
+    .eq("class_id", classId)
+    .order("display_order", { ascending: true })
+    .order("name", { ascending: true });
+  if (!includeInactive) query = query.eq("is_active", true);
+  const { data, error } = await query;
+  throwSupabaseError(error);
+  return (data || []).map(serializeLegacySubject);
+}
+
+async function getLegacyChaptersBySubject(subjectId, { includeInactive = false } = {}) {
+  requiredUuid(subjectId, "Invalid subject.");
+  let query = getSupabaseAdminClient()
+    .from("question_bank_chapters")
+    .select("id,subject_id,name,slug,chapter_number,display_order,is_active,created_at,updated_at")
+    .eq("subject_id", subjectId)
+    .order("display_order", { ascending: true })
+    .order("chapter_number", { ascending: true })
+    .order("name", { ascending: true });
+  if (!includeInactive) query = query.eq("is_active", true);
+  const { data, error } = await query;
+  throwSupabaseError(error);
+  return (data || []).map(serializeLegacyChapter);
+}
+
+async function createLegacyClass(body, adminId) {
+  const payload = assertClassPayload(body);
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_classes")
+    .insert([payload])
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "create", "question_bank_class", data.id, { name: data.name });
+  return { ...serializeLegacyClass(data), kind: "category" };
+}
+
+async function updateLegacyClass(classId, body, adminId) {
+  requiredUuid(classId, "Invalid class.");
+  const payload = assertClassPayload(body);
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_classes")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", classId)
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "update", "question_bank_class", classId, { name: data.name });
+  return { ...serializeLegacyClass(data), kind: "category" };
+}
+
+async function setLegacyClassStatus(classId, isActive, adminId) {
+  requiredUuid(classId, "Invalid class.");
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_classes")
+    .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString() })
+    .eq("id", classId)
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "set_status", "question_bank_class", classId, { isActive: data.is_active });
+  return { ...serializeLegacyClass(data), kind: "category" };
+}
+
+async function createLegacySubject(body, adminId) {
+  const payload = assertSubjectPayload(body);
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_subjects")
+    .insert([payload])
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "create", "question_bank_subject", data.id, { name: data.name });
+  return serializeLegacySubject(data);
+}
+
+async function updateLegacySubject(subjectId, body, adminId) {
+  requiredUuid(subjectId, "Invalid subject.");
+  const payload = assertSubjectPayload(body);
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_subjects")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", subjectId)
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "update", "question_bank_subject", subjectId, { name: data.name });
+  return serializeLegacySubject(data);
+}
+
+async function setLegacySubjectStatus(subjectId, isActive, adminId) {
+  requiredUuid(subjectId, "Invalid subject.");
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_subjects")
+    .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString() })
+    .eq("id", subjectId)
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "set_status", "question_bank_subject", subjectId, { isActive: data.is_active });
+  return serializeLegacySubject(data);
+}
+
+async function createLegacyChapter(body, adminId) {
+  const payload = assertChapterPayload(body);
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_chapters")
+    .insert([payload])
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "create", "question_bank_chapter", data.id, { name: data.name });
+  return serializeLegacyChapter(data);
+}
+
+async function updateLegacyChapter(chapterId, body, adminId) {
+  requiredUuid(chapterId, "Invalid chapter.");
+  const payload = assertChapterPayload(body);
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_chapters")
+    .update({ ...payload, updated_at: new Date().toISOString() })
+    .eq("id", chapterId)
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "update", "question_bank_chapter", chapterId, { name: data.name });
+  return serializeLegacyChapter(data);
+}
+
+async function setLegacyChapterStatus(chapterId, isActive, adminId) {
+  requiredUuid(chapterId, "Invalid chapter.");
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_chapters")
+    .update({ is_active: Boolean(isActive), updated_at: new Date().toISOString() })
+    .eq("id", chapterId)
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "set_status", "question_bank_chapter", chapterId, { isActive: data.is_active });
+  return serializeLegacyChapter(data);
+}
+
+async function createLegacyNode(body, adminId) {
+  if (body.parentId || body.parent_id) {
+    return createLegacyChapter({
+      ...body,
+      subjectId: body.parentId || body.parent_id,
+    }, adminId);
+  }
+  return createLegacySubject({
+    ...body,
+    classId: body.categoryId || body.category_id || body.classId || body.class_id,
+  }, adminId);
+}
+
+async function updateLegacyNode(nodeId, body, adminId) {
+  const kind = await getLegacyNodeKind(nodeId);
+  if (kind === "chapter") {
+    return updateLegacyChapter(nodeId, {
+      ...body,
+      subjectId: body.parentId || body.parent_id || body.subjectId || body.subject_id,
+    }, adminId);
+  }
+  return updateLegacySubject(nodeId, {
+    ...body,
+    classId: body.categoryId || body.category_id || body.classId || body.class_id,
+  }, adminId);
+}
+
+async function setLegacyNodeStatus(nodeId, isActive, adminId) {
+  const kind = await getLegacyNodeKind(nodeId);
+  return kind === "chapter"
+    ? setLegacyChapterStatus(nodeId, isActive, adminId)
+    : setLegacySubjectStatus(nodeId, isActive, adminId);
+}
+
+async function searchLegacyQuestions(filters = {}, { includeAnswers = false, studentSafe = false } = {}) {
+  const page = normalizePage(filters.page);
+  const limit = normalizeLimit(filters.limit);
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+  const optionColumns = includeAnswers ? "id,option_text,is_correct,display_order" : "id,option_text,display_order";
+  const questionColumns = [
+    "id",
+    "class_id",
+    "subject_id",
+    "chapter_id",
+    "question_type",
+    "question_text",
+    "difficulty",
+    "marks",
+    ...(!studentSafe ? ["explanation", "source"] : []),
+    "status",
+    "created_at",
+    "updated_at",
+  ].join(",");
+
+  let query = getSupabaseAdminClient()
+    .from("question_bank_questions")
+    .select(`${questionColumns},question_bank_question_options(${optionColumns})`, { count: "exact" })
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: true })
+    .range(from, to);
+
+  if (filters.chapterId || filters.chapter_id) query = query.eq("chapter_id", requiredUuid(filters.chapterId || filters.chapter_id, "Invalid chapter."));
+  else if (filters.subjectId || filters.subject_id) query = query.eq("subject_id", requiredUuid(filters.subjectId || filters.subject_id, "Invalid subject."));
+  else if (filters.classId || filters.class_id) query = query.eq("class_id", requiredUuid(filters.classId || filters.class_id, "Invalid class."));
+  else if (filters.nodeId || filters.node_id) {
+    const filter = await getLegacyQuestionScope(filters.nodeId || filters.node_id);
+    query = query.eq(filter.column, filter.id);
+  }
+  if (filters.difficulty) query = query.eq("difficulty", normalizeEnum(filters.difficulty, DIFFICULTIES, "Invalid difficulty."));
+  if (filters.questionType) query = query.eq("question_type", normalizeEnum(filters.questionType, QUESTION_TYPES, "Invalid question type."));
+  if (filters.status) query = query.eq("status", normalizeEnum(filters.status, STATUSES, "Invalid status."));
+  if (studentSafe) query = query.eq("status", "active");
+  if (filters.search) query = query.ilike("question_text", `%${String(filters.search).trim().slice(0, 100)}%`);
+
+  const { data, error, count } = await query;
+  throwSupabaseError(error);
+  return {
+    questions: (data || []).map((question) => serializeQuestion(question, { includeAnswers })),
+    page,
+    limit,
+    total: count || 0,
+  };
+}
+
+async function getLegacyQuestionPreview(questionId, { includeAnswers = false } = {}) {
+  requiredUuid(questionId, "Invalid question.");
+  const optionColumns = includeAnswers ? "id,option_text,is_correct,display_order" : "id,option_text,display_order";
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_questions")
+    .select(`*,question_bank_question_options(${optionColumns})`)
+    .eq("id", questionId)
+    .single();
+  throwSupabaseError(error);
+  return serializeQuestion(data, { includeAnswers });
+}
+
+async function createLegacyQuestion(body, adminId) {
+  const payload = assertLegacyQuestionPayload(body);
+  const client = getSupabaseAdminClient();
+  const { data: question, error } = await client
+    .from("question_bank_questions")
+    .insert([{ ...payload.question, created_by: adminId, updated_by: adminId }])
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  if (payload.options.length > 0) {
+    const { error: optionsError } = await client
+      .from("question_bank_question_options")
+      .insert(payload.options.map((option) => ({ ...option, question_id: question.id })));
+    throwSupabaseError(optionsError);
+  }
+  await writeAuditLog(adminId, "create", "question_bank_question", question.id, { text: question.question_text });
+  return getLegacyQuestionPreview(question.id, { includeAnswers: true });
+}
+
+async function updateLegacyQuestion(questionId, body, adminId) {
+  requiredUuid(questionId, "Invalid question.");
+  const payload = assertLegacyQuestionPayload(body);
+  const client = getSupabaseAdminClient();
+  const { error } = await client
+    .from("question_bank_questions")
+    .update({ ...payload.question, updated_by: adminId, updated_at: new Date().toISOString() })
+    .eq("id", questionId);
+  throwSupabaseError(error);
+  const { error: deleteError } = await client.from("question_bank_question_options").delete().eq("question_id", questionId);
+  throwSupabaseError(deleteError);
+  if (payload.options.length > 0) {
+    const { error: insertError } = await client
+      .from("question_bank_question_options")
+      .insert(payload.options.map((option) => ({ ...option, question_id: questionId })));
+    throwSupabaseError(insertError);
+  }
+  await writeAuditLog(adminId, "update", "question", questionId, { status: payload.question.status });
+  return getLegacyQuestionPreview(questionId, { includeAnswers: true });
+}
+
+async function setLegacyQuestionStatus(questionId, status, adminId) {
+  requiredUuid(questionId, "Invalid question.");
+  const normalizedStatus = normalizeEnum(status, STATUSES, "Invalid status.");
+  const { data, error } = await getSupabaseAdminClient()
+    .from("question_bank_questions")
+    .update({ status: normalizedStatus, updated_by: adminId, updated_at: new Date().toISOString() })
+    .eq("id", questionId)
+    .select("*")
+    .single();
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "set_status", "question", questionId, { status: normalizedStatus });
+  return serializeQuestion(data, { includeAnswers: true });
+}
+
+async function deleteLegacyNode(nodeId, adminId) {
+  requiredUuid(nodeId, "Invalid item.");
+  const { data: subject, error: subjectError } = await getSupabaseAdminClient()
+    .from("question_bank_subjects")
+    .select("id")
+    .eq("id", nodeId)
+    .maybeSingle();
+  throwSupabaseError(subjectError);
+  if (subject) return deleteLegacySubject(nodeId, adminId);
+
+  const { data: chapter, error: chapterError } = await getSupabaseAdminClient()
+    .from("question_bank_chapters")
+    .select("id")
+    .eq("id", nodeId)
+    .maybeSingle();
+  throwSupabaseError(chapterError);
+  if (chapter) return deleteLegacyChapter(nodeId, adminId);
+  throwRequest("Item not found.");
+}
+
+async function deleteLegacyClass(classId, adminId) {
+  requiredUuid(classId, "Invalid class.");
+  await deleteLegacyRows({ classId });
+  const { error } = await getSupabaseAdminClient().from("question_bank_classes").delete().eq("id", classId);
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "delete", "question_bank_class", classId);
+  return { id: classId };
+}
+
+async function deleteLegacySubject(subjectId, adminId) {
+  requiredUuid(subjectId, "Invalid subject.");
+  await deleteLegacyRows({ subjectId });
+  const { error } = await getSupabaseAdminClient().from("question_bank_subjects").delete().eq("id", subjectId);
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "delete", "question_bank_subject", subjectId);
+  return { id: subjectId };
+}
+
+async function deleteLegacyChapter(chapterId, adminId) {
+  requiredUuid(chapterId, "Invalid chapter.");
+  await deleteLegacyRows({ chapterId });
+  const { error } = await getSupabaseAdminClient().from("question_bank_chapters").delete().eq("id", chapterId);
+  throwSupabaseError(error);
+  await writeAuditLog(adminId, "delete", "question_bank_chapter", chapterId);
+  return { id: chapterId };
+}
+
+async function deleteLegacyQuestion(questionId, adminId) {
+  requiredUuid(questionId, "Invalid question.");
+  const { data: question, error: findError } = await getSupabaseAdminClient()
+    .from("question_bank_questions")
+    .select("id,question_text")
+    .eq("id", questionId)
+    .single();
+  throwSupabaseError(findError);
+  await deleteQuestionRows([questionId]);
+  await writeAuditLog(adminId, "delete", "question", questionId, {
+    text: String(question.question_text || "").slice(0, 160),
+  });
+  return { id: questionId };
+}
+
+async function deleteLegacyRows({ classId = null, subjectId = null, chapterId = null } = {}) {
+  const client = getSupabaseAdminClient();
+  let questionQuery = client.from("question_bank_questions").select("id");
+  let sessionQuery = client.from("question_bank_self_exam_sessions").select("id");
+  if (chapterId) {
+    questionQuery = questionQuery.eq("chapter_id", chapterId);
+    sessionQuery = sessionQuery.eq("chapter_id", chapterId);
+  } else if (subjectId) {
+    questionQuery = questionQuery.eq("subject_id", subjectId);
+    sessionQuery = sessionQuery.eq("subject_id", subjectId);
+  } else if (classId) {
+    questionQuery = questionQuery.eq("class_id", classId);
+    sessionQuery = sessionQuery.eq("class_id", classId);
+  }
+
+  const [{ data: questions, error: questionError }, { data: sessions, error: sessionError }] = await Promise.all([questionQuery, sessionQuery]);
+  throwSupabaseError(questionError);
+  throwSupabaseError(sessionError);
+  const questionIds = (questions || []).map((question) => question.id);
+  const sessionIds = (sessions || []).map((session) => session.id);
+
+  await deleteSessionsByIds(sessionIds);
+  await deleteQuestionRows(questionIds);
+
+  if (subjectId) {
+    const { error } = await client.from("question_bank_chapters").delete().eq("subject_id", subjectId);
+    throwSupabaseError(error);
+  }
+  if (classId) {
+    const { data: subjects, error: subjectError } = await client.from("question_bank_subjects").select("id").eq("class_id", classId);
+    throwSupabaseError(subjectError);
+    const subjectIds = (subjects || []).map((subject) => subject.id);
+    if (subjectIds.length > 0) {
+      const { error: chapterError } = await client.from("question_bank_chapters").delete().in("subject_id", subjectIds);
+      throwSupabaseError(chapterError);
+    }
+    const { error } = await client.from("question_bank_subjects").delete().eq("class_id", classId);
+    throwSupabaseError(error);
+  }
+}
+
+async function deleteSessionsByIds(sessionIds) {
+  const uniqueSessionIds = [...new Set((sessionIds || []).filter(Boolean))];
+  if (uniqueSessionIds.length === 0) return;
+  const client = getSupabaseAdminClient();
+  const { error: answerError } = await client.from("question_bank_self_exam_answers").delete().in("session_id", uniqueSessionIds);
+  throwSupabaseError(answerError);
+  const { error: sessionQuestionError } = await client.from("question_bank_self_exam_session_questions").delete().in("session_id", uniqueSessionIds);
+  throwSupabaseError(sessionQuestionError);
+  const { error: sessionError } = await client.from("question_bank_self_exam_sessions").delete().in("id", uniqueSessionIds);
+  throwSupabaseError(sessionError);
+}
+
+async function getLegacyQuestionScope(id) {
+  requiredUuid(id, "Invalid selection.");
+  const client = getSupabaseAdminClient();
+  const tables = [
+    ["question_bank_chapters", "chapter_id"],
+    ["question_bank_subjects", "subject_id"],
+    ["question_bank_classes", "class_id"],
+  ];
+  for (const [table, column] of tables) {
+    const { data, error } = await client.from(table).select("id").eq("id", id).maybeSingle();
+    throwSupabaseError(error);
+    if (data) return { column, id };
+  }
+  throwRequest("Question bank selection not found.");
+}
+
+async function getLegacyNodeKind(id) {
+  requiredUuid(id, "Invalid item.");
+  const client = getSupabaseAdminClient();
+  const { data: chapter, error: chapterError } = await client.from("question_bank_chapters").select("id").eq("id", id).maybeSingle();
+  throwSupabaseError(chapterError);
+  if (chapter) return "chapter";
+  const { data: subject, error: subjectError } = await client.from("question_bank_subjects").select("id").eq("id", id).maybeSingle();
+  throwSupabaseError(subjectError);
+  if (subject) return "subject";
+  throwRequest("Item not found.");
+}
+
+function assertLegacyQuestionPayload(body = {}) {
+  const payload = {
+    class_id: requiredUuid(body.classId || body.class_id, "Class is required."),
+    subject_id: requiredUuid(body.subjectId || body.subject_id, "Subject is required."),
+    chapter_id: optionalUuid(body.chapterId || body.chapter_id, "Invalid chapter."),
+    question_type: normalizeEnum(body.questionType || body.question_type, QUESTION_TYPES, "Invalid question type."),
+    question_text: requiredText(body.questionText || body.question_text, "Question text is required."),
+    difficulty: normalizeEnum(body.difficulty, DIFFICULTIES, "Invalid difficulty."),
+    marks: positiveNumber(body.marks, "Marks must be greater than zero."),
+    explanation: optionalText(body.explanation),
+    source: optionalText(body.source),
+    status: normalizeEnum(body.status || "draft", STATUSES, "Invalid status."),
+  };
+  const options = Array.isArray(body.options) ? body.options : [];
+  if (payload.question_type !== "mcq") return { question: payload, options: [] };
+  if (options.length < 2) throwRequest("MCQ questions require at least two options.");
+  const normalizedOptions = options.map((option, index) => ({
+    option_text: requiredText(option?.text || option?.optionText || option?.option_text, "Option text is required."),
+    is_correct: Boolean(option?.isCorrect || option?.is_correct),
+    display_order: Number.isSafeInteger(Number(option?.displayOrder ?? option?.display_order))
+      ? Number(option?.displayOrder ?? option?.display_order)
+      : index,
+  }));
+  if (normalizedOptions.filter((option) => option.is_correct).length !== 1) {
+    throwRequest("MCQ questions require exactly one correct option.");
+  }
+  return { question: payload, options: normalizedOptions };
+}
+
+function serializeLegacyClass(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    color: "",
+    displayOrder: row.display_order,
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeLegacySubject(row) {
+  return {
+    id: row.id,
+    classId: row.class_id,
+    categoryId: row.class_id,
+    parentId: null,
+    name: row.name,
+    slug: row.slug,
+    code: row.code || "",
+    type: "subject",
+    displayOrder: row.display_order,
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeLegacyChapter(row) {
+  return {
+    id: row.id,
+    subjectId: row.subject_id,
+    categoryId: "",
+    parentId: row.subject_id,
+    name: row.name,
+    slug: row.slug,
+    chapterNumber: row.chapter_number,
+    type: "chapter",
+    displayOrder: row.display_order,
+    isActive: Boolean(row.is_active),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function serializeLegacyNode(row) {
+  if (row.subjectId) {
+    return {
+      id: row.id,
+      categoryId: row.categoryId || "",
+      parentId: row.parentId,
+      name: row.name,
+      slug: row.slug,
+      type: "chapter",
+      icon: "",
+      color: "#2563eb",
+      description: "",
+      displayOrder: row.displayOrder,
+      isActive: row.isActive,
+      metadata: { chapterNumber: row.chapterNumber ?? null },
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+  return {
+    id: row.id,
+    categoryId: row.categoryId || row.classId,
+    parentId: null,
+    name: row.name,
+    slug: row.slug,
+    type: "subject",
+    icon: "",
+    color: "#10b981",
+    description: "",
+    displayOrder: row.displayOrder,
+    isActive: row.isActive,
+    metadata: { code: row.code || "" },
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function isMissingExamHierarchyError(error) {
+  const message = String(error?.message || "");
+  return error?.code === "PGRST205"
+    || error?.code === "PGRST204"
+    || /exam_categories|exam_nodes|node_id|Could not find/i.test(message);
 }
 
 async function writeAuditLog(adminId, action, entityType, entityId, metadata = {}) {
