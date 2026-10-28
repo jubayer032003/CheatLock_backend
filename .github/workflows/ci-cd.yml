@@ -19,7 +19,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
-          node-value: '20'
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: './web-dashboard/package-lock.json'
 
@@ -33,6 +33,11 @@ jobs:
         run: |
           cd backend
           npm ci
+
+      - name: Validate backend and legacy Self Exam regressions
+        run: |
+          npm ci
+          node --test tests/*.test.js
 
   build-docker-images:
     needs: lint-and-test

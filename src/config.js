@@ -129,6 +129,9 @@ export function resolveAllowedOrigins({
       continue;
     }
     if (entry === "*") {
+      if (isProduction) {
+        throw new Error("Wildcard CORS origins are not allowed in production.");
+      }
       configured.push("*");
       continue;
     }
