@@ -1,3 +1,4 @@
+import { leaderboardRouter } from "./leaderboard.js";
 import express from "express";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { Exam } from "../models/Exam.js";
@@ -20,6 +21,7 @@ import {
 } from "../socket/proctoring.js";
 
 export const teacherRouter = express.Router();
+teacherRouter.use(leaderboardRouter);
 const MAX_INLINE_TIMELINE_PREVIEW_LENGTH = 250_000;
 
 teacherRouter.get(
