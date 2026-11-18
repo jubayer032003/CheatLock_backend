@@ -1,3 +1,4 @@
+import { publishedResultsRouter } from "./publishedResults.js";
 import express from "express";
 import mongoose from "mongoose";
 import { requireAuth, requireRole } from "../middleware/auth.js";
@@ -7,6 +8,7 @@ import { StudentNotification } from "../models/StudentNotification.js";
 import { serializeNotification } from "../services/studentNotifications.js";
 
 export const studentsRouter = express.Router();
+studentsRouter.use(publishedResultsRouter);
 
 studentsRouter.get(
   "/:studentId/exams/:examId/grade",

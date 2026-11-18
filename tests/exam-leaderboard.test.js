@@ -8,6 +8,7 @@ import { User } from "../backend/src/models/User.js";
 import { Exam } from "../backend/src/models/Exam.js";
 import { ExamSession } from "../backend/src/models/ExamSession.js";
 import { Submission } from "../backend/src/models/Submission.js";
+import { ExamResultPublication } from "../backend/src/models/ExamResultPublication.js";
 
 process.env.JWT_SECRET = "leaderboard-isolated-test-secret";
 const question = (extra = {}) => ({ type: "MCQ", text: "Capital?", options: ["Paris", "Rome"], correctAnswer: "0", marks: 2, ...extra });
@@ -56,6 +57,7 @@ test("exams without valid MCQ keys do not invent a rank or percentage", () => {
 
 const examId = "65a000000000000000000001", teacherId = "65b000000000000000000001";
 const query = value => ({ select() { return this; }, lean: async () => value, then: (yes, no) => Promise.resolve(value).then(yes, no) });
+ExamResultPublication.findById = () => query(null);
 let exam, queries;
 User.findById = id => query(id === teacherId ? { _id: teacherId, identifier: "teacher@test", role: "TEACHER", status: "ACTIVE", tokenVersion: 0 }
   : { _id: id, identifier: "student@test", role: "STUDENT", status: "ACTIVE", tokenVersion: 0 });
