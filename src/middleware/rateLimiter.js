@@ -6,6 +6,7 @@ import { logger } from "../services/logger.js";
 
 const DEFAULT_LIMITS = {
   api: { windowMs: 60 * 1000, max: 120 },
+  examEntry: { windowMs: 60 * 1000, max: 120 },
   anonymousApi: { windowMs: 60 * 1000, max: 1200 },
   apiIngress: { windowMs: 60 * 1000, max: 12000 },
   login: { windowMs: 15 * 60 * 1000, max: 8 },
@@ -67,9 +68,13 @@ const memoryHistory = new Map();
 export async function rateLimiter(req, res, next) {
   try {
     const subject = authenticatedSubject(req);
-    const group = subject ? "api-account" : "api-anonymous";
+    // Code lookup is also the Android waiting-screen refresh. Keep admission
+    // available when unrelated background API traffic exhausts its own budget.
+    const isExamEntry = subject && req.method === "GET" && /^\/exams\/access\/[^/]+\/?$/i.test(req.path || "");
+    const group = subject ? (isExamEntry ? "api-exam-entry" : "api-account") : "api-anonymous";
     const key = subject ? hash(subject) : ipOnlyKey(req);
-    const result = await consumeRateLimit(`${group}:${key}`, subject ? DEFAULT_LIMITS.api : DEFAULT_LIMITS.anonymousApi);
+    const policy = subject ? (isExamEntry ? DEFAULT_LIMITS.examEntry : DEFAULT_LIMITS.api) : DEFAULT_LIMITS.anonymousApi;
+    const result = await consumeRateLimit(`${group}:${key}`, policy);
     if (!result.allowed) return rejectRateLimit(res, result, group);
     const ingress = await consumeRateLimit(`api-ingress:${ipOnlyKey(req)}`, DEFAULT_LIMITS.apiIngress);
     if (!ingress.allowed) return rejectRateLimit(res, ingress, "api-ingress");

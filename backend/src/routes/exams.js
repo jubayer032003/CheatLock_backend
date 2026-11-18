@@ -176,7 +176,7 @@ examsRouter.get("/assigned", requireAuth, requireRole("STUDENT"), async (req, re
   }
 });
 
-examsRouter.get("/access/:code", requireAuth, requireRole("STUDENT"), accessCodeRateLimiter, async (req, res, next) => {
+examsRouter.get("/access/:code", requireAuth, requireRole("STUDENT"), async (req, res, next) => {
   try {
     const exam = await Exam.findOne({
       accessCode: req.params.code.toUpperCase(),
@@ -185,7 +185,7 @@ examsRouter.get("/access/:code", requireAuth, requireRole("STUDENT"), accessCode
     if (!exam) {
       const error = new Error("Invalid exam code.");
       error.status = 404;
-      throw error;
+      return accessCodeRateLimiter(req, res, limitError => next(limitError || error));
     }
 
     const assignedStudents = exam.assignedStudents || [];
@@ -194,7 +194,7 @@ examsRouter.get("/access/:code", requireAuth, requireRole("STUDENT"), accessCode
     if (!isOpenAccessExam && !assignedStudents.includes(req.user.identifier)) {
       const error = new Error("This exam code is valid, but this student is not assigned to the exam.");
       error.status = 403;
-      throw error;
+      return accessCodeRateLimiter(req, res, limitError => next(limitError || error));
     }
 
     if (isOpenAccessExam && !assignedStudents.includes(req.user.identifier)) {

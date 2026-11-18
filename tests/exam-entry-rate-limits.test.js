@@ -49,6 +49,17 @@ test("forged bearer subjects do not create independent authenticated budgets", a
   assert.equal(blocked.status, 429); assert.equal(blocked.body.rateLimitGroup, "api-anonymous");
   assert.equal((await invoke(rateLimiter, request(0))).status, 200);
 });
+
+test("exam re-entry has a separate per-account allowance from background API requests", async () => {
+  for (let i = 0; i < 120; i++) assert.equal((await invoke(rateLimiter, request(0))).status, 200);
+  assert.equal((await invoke(rateLimiter, request(0))).status, 429);
+  const entry = () => request(0, { method: "GET", path: "/exams/access/CLASS50" });
+  for (let i = 0; i < 120; i++) assert.equal((await invoke(rateLimiter, entry())).status, 200);
+  const flood = await invoke(rateLimiter, entry());
+  assert.equal(flood.status, 429);
+  assert.equal(flood.body.rateLimitGroup, "api-exam-entry");
+  assert.equal((await invoke(rateLimiter, request(1, { method: "GET", path: "/exams/access/CLASS50" }))).status, 200);
+});
 test("200 authenticated students can use the same code and shared IP", async () => {
   for (let i = 0; i < 200; i++) assert.equal((await invoke(accessCodeRateLimiter, request(i))).status, 200);
 });
@@ -135,4 +146,18 @@ test("real HTTP exam-code entry admits 200 assigned students concurrently behind
   assert.equal((await fetch(url, { headers: { Authorization: `Bearer ${tokenFor(200)}` } })).status, 403);
   assert.equal((await fetch(url, { headers: { Authorization: `Bearer ${tokenFor(999)}` } })).status, 403);
   assert.equal((await fetch(url)).status, 401);
+
+  // The Android waiting screen polls this endpoint every five seconds. Leaving
+  // and re-entering must still work after more than 20 successful status checks.
+  for (let i = 0; i < 40; i++) {
+    assert.equal((await fetch(url, { headers: { Authorization: `Bearer ${tokenFor(0)}` } })).status, 200,
+      `successful waiting-screen refresh/re-entry ${i + 1}`);
+  }
+  // Bad guesses retain their own limit, without locking out a valid exam code.
+  const badUrl = url.replace("CLASS50", "INVALID");
+  for (let i = 0; i < 20; i++) {
+    assert.equal((await fetch(badUrl, { headers: { Authorization: `Bearer ${tokenFor(0)}` } })).status, 404);
+  }
+  assert.equal((await fetch(badUrl, { headers: { Authorization: `Bearer ${tokenFor(0)}` } })).status, 429);
+  assert.equal((await fetch(url, { headers: { Authorization: `Bearer ${tokenFor(0)}` } })).status, 200);
 });
