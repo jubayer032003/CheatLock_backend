@@ -1,3 +1,4 @@
+import { teacherSignupRouter } from "./teacherSignup.js";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import express from "express";
@@ -11,6 +12,7 @@ import { deleteStudentAccount } from "../services/accountDeletion.js";
 import { rememberedSessions } from "../services/rememberedSessions.js";
 
 export const authRouter = express.Router();
+authRouter.use(teacherSignupRouter);
 
 const ADMIN_LOGIN_ROLES = ["SUPER_ADMIN", "INSTITUTION_ADMIN", "DEPARTMENT_ADMIN"];
 const sessionLimiter = createRateLimiter("remembered-session", { windowMs: 60_000, max: 30 },
