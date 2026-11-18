@@ -105,7 +105,7 @@ function getWeightForAlert(alertText, weights) {
 export function configureProctoringSocket(io) {
   io.use(async (socket, next) => {
     try {
-      const limit = await consumeSocketAuthRateLimit(socket.handshake.address || "unknown");
+      const limit = await consumeSocketAuthRateLimit(socket.handshake.address || "unknown", socket.handshake.auth?.token);
       if (!limit.allowed) {
         const error = new Error("Rate limited.");
         error.code = "RATE_LIMITED";

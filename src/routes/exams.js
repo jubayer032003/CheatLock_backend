@@ -176,7 +176,7 @@ examsRouter.get("/assigned", requireAuth, requireRole("STUDENT"), async (req, re
   }
 });
 
-examsRouter.get("/access/:code", accessCodeRateLimiter, requireAuth, requireRole("STUDENT"), async (req, res, next) => {
+examsRouter.get("/access/:code", requireAuth, requireRole("STUDENT"), accessCodeRateLimiter, async (req, res, next) => {
   try {
     const exam = await Exam.findOne({
       accessCode: req.params.code.toUpperCase(),

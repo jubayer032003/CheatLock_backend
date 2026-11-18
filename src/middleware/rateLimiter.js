@@ -1,15 +1,19 @@
 import Redis from "ioredis";
 import { createHash } from "node:crypto";
+import jwt from "jsonwebtoken";
 import { config } from "../config.js";
 import { logger } from "../services/logger.js";
 
 const DEFAULT_LIMITS = {
   api: { windowMs: 60 * 1000, max: 120 },
+  anonymousApi: { windowMs: 60 * 1000, max: 1200 },
+  apiIngress: { windowMs: 60 * 1000, max: 12000 },
   login: { windowMs: 15 * 60 * 1000, max: 8 },
   signup: { windowMs: 60 * 60 * 1000, max: 10 },
   passwordReset: { windowMs: 15 * 60 * 1000, max: 5 },
   accessCode: { windowMs: 10 * 60 * 1000, max: 20 },
   socketAuth: { windowMs: 5 * 60 * 1000, max: 30 },
+  socketIngress: { windowMs: 5 * 60 * 1000, max: 6000 },
 };
 
 const redisUrl = config.redis.url;
@@ -58,7 +62,20 @@ if (redisUrl) {
 
 const memoryHistory = new Map();
 
-export const rateLimiter = createRateLimiter("api", DEFAULT_LIMITS.api);
+// A classroom shares an IP address. Signed account identities get independent
+// budgets; the larger IP budget is only an aggregate abuse safeguard.
+export async function rateLimiter(req, res, next) {
+  try {
+    const subject = authenticatedSubject(req);
+    const group = subject ? "api-account" : "api-anonymous";
+    const key = subject ? hash(subject) : ipOnlyKey(req);
+    const result = await consumeRateLimit(`${group}:${key}`, subject ? DEFAULT_LIMITS.api : DEFAULT_LIMITS.anonymousApi);
+    if (!result.allowed) return rejectRateLimit(res, result, group);
+    const ingress = await consumeRateLimit(`api-ingress:${ipOnlyKey(req)}`, DEFAULT_LIMITS.apiIngress);
+    if (!ingress.allowed) return rejectRateLimit(res, ingress, "api-ingress");
+    next();
+  } catch (error) { next(error); }
+}
 export const loginRateLimiter = createRateLimiter("login", DEFAULT_LIMITS.login, accountAwareKey);
 export const signupRateLimiter = createRateLimiter("signup", DEFAULT_LIMITS.signup, accountAwareKey);
 export const passwordResetRateLimiter = createRateLimiter("password-reset", DEFAULT_LIMITS.passwordReset, accountAwareKey);
@@ -78,24 +95,29 @@ export async function consumeStudentMonitoringRateLimit(user) {
 
 export function createRateLimiter(group, policy, keyBuilder = ipOnlyKey) {
   return async function groupedRateLimiter(req, res, next) {
-    const key = `${group}:${keyBuilder(req)}`;
-    const result = await consumeRateLimit(key, policy);
-    if (!result.allowed) {
-      res.setHeader("Retry-After", String(Math.ceil(result.retryAfterMs / 1000)));
-      res.status(429).json({
-        code: "RATE_LIMITED",
-        message: "Too many requests. Please try again later.",
-        retryAfterMs: result.retryAfterMs,
-      });
-      return;
-    }
-
-    next();
+    try {
+      const key = `${group}:${keyBuilder(req)}`;
+      const result = await consumeRateLimit(key, policy);
+      if (!result.allowed) return rejectRateLimit(res, result, group);
+      next();
+    } catch (error) { next(error); }
   };
 }
 
-export async function consumeSocketAuthRateLimit(ip = "unknown") {
-  return consumeRateLimit(`socket-auth:${normalizeKeyPart(ip)}`, DEFAULT_LIMITS.socketAuth);
+function rejectRateLimit(res, result, group) {
+  res.setHeader("Retry-After", String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))));
+  return res.status(429).json({
+    code: "RATE_LIMITED", message: "Too many requests. Please try again later.",
+    retryAfterMs: result.retryAfterMs, rateLimitGroup: group,
+  });
+}
+
+export async function consumeSocketAuthRateLimit(ip = "unknown", token) {
+  const subject = authenticatedSubject({ headers: { authorization: typeof token === "string" ? `Bearer ${token}` : "" } });
+  const key = subject ? `socket-account:${hash(subject)}` : `socket-auth:${normalizeKeyPart(ip)}`;
+  const account = await consumeRateLimit(key, DEFAULT_LIMITS.socketAuth);
+  if (!account.allowed) return account;
+  return consumeRateLimit(`socket-ingress:${normalizeKeyPart(ip)}`, DEFAULT_LIMITS.socketIngress);
 }
 
 export function clearRateLimiterStateForTests() {
@@ -155,12 +177,51 @@ cleanupTimer.unref?.();
 
 function accountAwareKey(req) {
   const identifier = normalizeIdentifier(req.body?.identifier || req.body?.email || req.params?.userId || "");
+  // Keep login/reset limits bound to the target account, including managed
+  // password resets performed by an administrator for different students.
+  if (identifier) return `${ipOnlyKey(req)}:${identifier}`;
+  const subject = authenticatedSubject(req);
+  if (subject) return `account:${hash(subject)}`;
+  // Firebase exchange has no identifier field. A credential fingerprint prevents
+  // different students sharing the "no-account" bucket; it never authorizes them.
+  if (!identifier && typeof req.body?.idToken === "string" && req.body.idToken.length <= 16384) {
+    return `${ipOnlyKey(req)}:credential:${hash(req.body.idToken)}`;
+  }
   return `${ipOnlyKey(req)}:${identifier || "no-account"}`;
 }
 
 function accessCodeAwareKey(req) {
-  return `${ipOnlyKey(req)}:${normalizeKeyPart(req.params?.code || req.body?.code || "no-code")}`;
+  const subject = authenticatedSubject(req);
+  if (!subject) throw Object.assign(new Error("Student authentication required."), { status: 401, code: "AUTH_INVALID" });
+  // Count attempts across codes for one authenticated account. Rotating codes or
+  // network addresses cannot evade the guessing limit or consume classmates' budgets.
+  return `account:${hash(subject)}`;
 }
+
+export function sessionRateLimitKey(req) {
+  const token = typeof req.body?.refreshToken === "string" ? req.body.refreshToken.slice(0, 128) : "";
+  if (token) return `${ipOnlyKey(req)}:device:${hash(token)}`;
+  const subject = authenticatedSubject(req);
+  if (subject) return `account:${hash(subject)}`;
+  return `${ipOnlyKey(req)}:device:${hash(token)}`;
+}
+
+const subjectCache = Symbol("verifiedRateLimitSubject");
+function authenticatedSubject(req) {
+  if (Object.prototype.hasOwnProperty.call(req, subjectCache)) return req[subjectCache];
+  let subject = null;
+  const authorization = req.headers?.authorization;
+  if (typeof authorization === "string" && authorization.startsWith("Bearer ")) {
+    try {
+      const claims = jwt.verify(authorization.slice(7), config.jwt.secret());
+      if (typeof claims.sub === "string" && claims.sub.length > 0 && claims.sub.length <= 256) subject = claims.sub;
+    } catch { /* Invalid/expired credentials retain the anonymous budget; route auth still rejects them. */ }
+  }
+  req[subjectCache] = subject;
+  return subject;
+}
+
+const hash = (value) => createHash("sha256").update(value).digest("hex");
 
 function ipOnlyKey(req) {
   // Express resolves req.ip according to its explicitly configured trust proxy policy.
@@ -168,7 +229,8 @@ function ipOnlyKey(req) {
 }
 
 function normalizeIdentifier(value) {
-  return normalizeKeyPart(String(value || "").trim().toLowerCase().replace(/\s+/g, ""));
+  const text = String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+  return text ? normalizeKeyPart(text) : "";
 }
 
 function normalizeKeyPart(value) {

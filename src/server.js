@@ -27,6 +27,7 @@ import { rateLimiter, monitoringIngressLimiter } from "./middleware/rateLimiter.
 import { logger } from "./services/logger.js";
 import { configureEvidenceRetentionCleanup } from "./services/evidenceRetention.js";
 import { configureSocketAdapter } from "./services/socketAdapter.js";
+import { resolveTrustProxy } from "./services/httpProxy.js";
 
 validateStartupConfig();
 
@@ -39,6 +40,7 @@ if (process.env.MONGODB_DNS_SERVERS) {
 }
 
 const app = express();
+app.set("trust proxy", resolveTrustProxy());
 const server = http.createServer(app);
 const port = config.port;
 const corsOptions = buildCorsOptions();

@@ -4,17 +4,17 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import { config } from "../config.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
-import { createRateLimiter, loginRateLimiter, passwordResetRateLimiter, signupRateLimiter } from "../middleware/rateLimiter.js";
+import { createRateLimiter, loginRateLimiter, passwordResetRateLimiter, signupRateLimiter, sessionRateLimitKey } from "../middleware/rateLimiter.js";
 import { User } from "../models/User.js";
 import { logger } from "../services/logger.js";
 import { deleteStudentAccount } from "../services/accountDeletion.js";
-import { rememberedSessions, hashSessionToken } from "../services/rememberedSessions.js";
+import { rememberedSessions } from "../services/rememberedSessions.js";
 
 export const authRouter = express.Router();
 
 const ADMIN_LOGIN_ROLES = ["SUPER_ADMIN", "INSTITUTION_ADMIN", "DEPARTMENT_ADMIN"];
 const sessionLimiter = createRateLimiter("remembered-session", { windowMs: 60_000, max: 30 },
-  (req) => `${req.ip}:${hashSessionToken(typeof req.body?.refreshToken === "string" ? req.body.refreshToken.slice(0, 128) : "")}`);
+  sessionRateLimitKey);
 
 authRouter.post("/refresh", sessionLimiter, async (req, res, next) => {
   try {
